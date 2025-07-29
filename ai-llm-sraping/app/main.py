@@ -16,10 +16,6 @@ app = FastAPI(
     title="Product API",
 )
 
-GCS_CREDENTIALS = "/app/keys/key.json"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = GCS_CREDENTIALS
-
-
 
 class ProductHTML(BaseModel):
     html_content: str = Field(
