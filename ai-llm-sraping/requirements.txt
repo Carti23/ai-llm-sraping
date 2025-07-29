@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+beautifulsoup4
+lxml
+openai==0.28
+faiss-cpu
+google-cloud-storage
+pytest
+httpx
+isort
