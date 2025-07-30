@@ -1,17 +1,20 @@
 import os
+import asyncio
 from fastapi import FastAPI, HTTPException
+from google.cloud import storage
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy.orm import Session
 
-from .database import async_engine, AsyncSessionLocal, Base
+from .database import Base, SessionLocal, engine
 from .gcs_uploader import upload_image_to_gcs
 from .models import Comment, Product
 from .scraper import process_product
 
-Base.metadata.create_all(bind=async_engine)
+Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Product API")
+app = FastAPI(
+    title="Product API",
+)
 
 
 class ProductHTML(BaseModel):
@@ -20,32 +23,37 @@ class ProductHTML(BaseModel):
         example=open('app/data/sample_product.html').read() if os.path.exists('app/data/sample_product.html') else "<html>...</html>"
     )
 
+
 @app.get("/product/{product_id}")
 async def get_product(product_id: int):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Product).where(Product.id == product_id))
-        product = result.scalar_one_or_none()
+    def fetch_product_and_comments():
+        session: Session = SessionLocal()
+        try:
+            product = session.query(Product).filter(Product.id == product_id).first()
+            if not product:
+                return None, []
+            comments = session.query(Comment).filter(Comment.product_id == product_id).all()
+            return product, comments
+        finally:
+            session.close()
 
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
+    product, comments = await asyncio.to_thread(fetch_product_and_comments)
 
-        result_comments = await session.execute(select(Comment).where(Comment.product_id == product_id))
-        comments = result_comments.scalars().all()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
 
-        return {
-            "title": product.title,
-            "image_urls": product.image_urls.split(','),
-            "comments": [c.text for c in comments],
-            "sentiments": {c.text: c.sentiment for c in comments}
-        }
+    return {
+        "title": product.title,
+        "image_urls": product.image_urls.split(','),
+        "comments": [c.text for c in comments],
+        "sentiments": {c.text: c.sentiment for c in comments}
+    }
 
 
 @app.post("/product/", summary="Create a product from HTML content")
 async def create_product(data: ProductHTML):
-    product_id, images = await process_product(data.html_content, return_images=True)
+    product_id, images = await asyncio.to_thread(process_product, data.html_content, True)
 
-    for image_url in images:
-        await upload_image_to_gcs(image_url)
+    await asyncio.gather(*(upload_image_to_gcs(image_url) for image_url in images))
 
     return {"id": product_id, "message": "Product created successfully"}
-
