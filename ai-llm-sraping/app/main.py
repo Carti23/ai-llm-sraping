@@ -1,20 +1,17 @@
 import os
-
 from fastapi import FastAPI, HTTPException
-from google.cloud import storage
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from .database import Base, SessionLocal, engine
+from .database import async_engine, AsyncSessionLocal, Base
 from .gcs_uploader import upload_image_to_gcs
 from .models import Comment, Product
 from .scraper import process_product
 
-Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=async_engine)
 
-app = FastAPI(
-    title="Product API",
-)
+app = FastAPI(title="Product API")
 
 
 class ProductHTML(BaseModel):
@@ -24,28 +21,31 @@ class ProductHTML(BaseModel):
     )
 
 @app.get("/product/{product_id}")
-def get_product(product_id: int):
-    session: Session = SessionLocal()
-    product = session.query(Product).filter(Product.id == product_id).first()
-    if not product:
-        session.close()
-        raise HTTPException(status_code=404, detail="Product not found")
+async def get_product(product_id: int):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Product).where(Product.id == product_id))
+        product = result.scalar_one_or_none()
 
-    comments = session.query(Comment).filter(Comment.product_id == product_id).all()
-    session.close()
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
 
-    return {
-        "title": product.title,
-        "image_urls": product.image_urls.split(','),
-        "comments": [c.text for c in comments],
-        "sentiments": {c.text: c.sentiment for c in comments}
-    }
+        result_comments = await session.execute(select(Comment).where(Comment.product_id == product_id))
+        comments = result_comments.scalars().all()
+
+        return {
+            "title": product.title,
+            "image_urls": product.image_urls.split(','),
+            "comments": [c.text for c in comments],
+            "sentiments": {c.text: c.sentiment for c in comments}
+        }
+
 
 @app.post("/product/", summary="Create a product from HTML content")
-def create_product(data: ProductHTML):
-    product_id, images = process_product(data.html_content, return_images=True)
+async def create_product(data: ProductHTML):
+    product_id, images = await process_product(data.html_content, return_images=True)
 
     for image_url in images:
-        upload_image_to_gcs(image_url)
+        await upload_image_to_gcs(image_url)
 
     return {"id": product_id, "message": "Product created successfully"}
+

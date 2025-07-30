@@ -5,12 +5,9 @@ from .database import Base
 
 class Product(Base):
     __tablename__ = 'products'
-
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     image_urls = Column(Text)
-    comments = Column(Text)
-    sentiments = Column(Text) 
 
 class Comment(Base):
     __tablename__ = 'comments'
